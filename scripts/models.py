@@ -4,83 +4,129 @@ models.py — All three model definitions
 This file defines three classifiers that all solve the same task:
 given a 2D point, predict whether it belongs to class 0 or class 1.
 
-  1. ClassicalNN  — standard feedforward neural network
-  2. QNN          — fully quantum parameterized circuit
-  3. HybridNN     — classical preprocessing + quantum circuit + classical postprocessing
+  1. ClassicalNN  — standard feedforward neural network (unchanged baseline)
+  2. QNN          — improved quantum circuit with data re-uploading + dual measurement
+  3. HybridNN     — wider classical preprocessing + improved quantum circuit + classical postprocessing
 
-The quantum models use PennyLane's TorchLayer to make the quantum circuit
-behave like a standard PyTorch nn.Module — meaning it participates in
-automatic differentiation (autograd) and gradient-based training just like
-a normal layer would.
+Improvements over the original architecture (v1):
+
+  [1] N_LAYERS 3 → 4
+      More layers = wider Fourier spectrum = richer function class the circuit
+      can represent. Still safe from barren plateaus at 2 qubits.
+
+  [2] Data re-uploading (Pérez-Salinas et al. 2020)
+      The original circuit encoded inputs once at the very start. This limits
+      the circuit to a Fourier series with frequencies determined only by the
+      circuit depth — not by the data. Re-uploading encodes the inputs again
+      at the start of every layer, which effectively multiplies up the accessible
+      Fourier frequencies and makes the quantum model genuinely non-linear.
+      Think of it like polynomial features in classical ML: encoding x once gives
+      you linear functions of x; encoding it N times (interleaved with
+      entangling operations) gives you degree-N polynomial-like functions.
+
+  [3] Measure both qubits, not just qubit 0
+      The original circuit discarded all information about qubit 1 at measurement
+      time. The entangling CNOT gates spread information across both qubits —
+      throwing away qubit 1's state wasted that computation. Measuring both
+      gives a 2-dimensional output vector, which is then combined by a classical
+      linear layer.
+
+  [4] Wider classical pre-layer in HybridNN (2 → 4 → 2)
+      The original pre-layer was Linear(2→2)+Tanh, which can only apply a
+      linear transformation (rotation/scale/shear) before Tanh. A 2×2 linear
+      map can't create a non-linear realignment of the data. Adding a hidden
+      dimension (2→4→2) gives the pre-layer true non-linear capacity — it can
+      now learn to reshape the data manifold, not just rotate it.
 """
 
 import torch
 import torch.nn as nn
 import pennylane as qml
+from pennylane.qnn.torch import TorchLayer
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared quantum circuit configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-N_QUBITS = 2   # One qubit per input feature (we have 2 features: x and y)
-N_LAYERS = 3   # How many layers of parameterized gates to stack
+N_QUBITS = 2   # One qubit per input feature (x and y)
+N_LAYERS = 4   # Increased from 3: more layers → wider Fourier spectrum
 
-# A PennyLane "device" is the backend that simulates or runs the circuit.
-# "default.qubit" is the built-in exact statevector simulator — runs on CPU,
-# no quantum hardware needed. "wires" is just PennyLane's word for qubits.
+# "default.qubit" is the built-in exact statevector simulator.
+# "wires" is PennyLane's word for qubits.
 dev = qml.device("default.qubit", wires=N_QUBITS)
 
 
 @qml.qnode(dev, interface="torch")
-def quantum_circuit(inputs, weights):
+def quantum_circuit_reupload(inputs, weights):
     """
-    The parameterized quantum circuit used by both QNN and HybridNN.
-
-    Think of this like a function: it takes input features and learnable
-    weights, runs a sequence of quantum operations, and returns a number.
+    Parameterized quantum circuit with data re-uploading and dual measurement.
 
     Args:
-        inputs   shape (2,)                   — the 2 input features
+        inputs   shape (2,)                    — the 2 input features
         weights  shape (N_LAYERS, N_QUBITS, 3) — trainable rotation angles
 
     Returns:
-        A single float in [-1, 1]: the expectation value of PauliZ on qubit 0.
+        A list of 2 floats, each in [-1, 1]:
+        [expval(PauliZ on qubit 0), expval(PauliZ on qubit 1)]
+        TorchLayer converts this to a (batch, 2) tensor.
 
-    ── Step 1: AngleEmbedding ───────────────────────────────────────────────
-    Encodes each input feature as a rotation angle on its qubit.
-    Feature 0 rotates qubit 0 by inputs[0] radians around the X axis.
-    Feature 1 rotates qubit 1 by inputs[1] radians around the X axis.
+    ── What changed vs the original circuit ────────────────────────────────
 
-    This is the quantum analog of passing data into a neural network layer.
-    The difference is that on a qubit, a "rotation" changes its quantum state,
-    which lives in a 2D complex vector space (a Bloch sphere).
+    Original:
+        AngleEmbedding(inputs)              ← encode once
+        StronglyEntanglingLayers(weights)   ← all layers at once
+        expval(PauliZ(0))                   ← measure only qubit 0
 
-    ── Step 2: StronglyEntanglingLayers ─────────────────────────────────────
-    Applies N_LAYERS rounds of:
-      a) A parameterized Rot gate on each qubit.
-         Rot(φ, θ, ω) = Rz(ω) · Ry(θ) · Rz(φ)
-         This is the most general single-qubit rotation — 3 angles per qubit.
-      b) CNOT gates that entangle neighboring qubits.
-         Entanglement lets the circuit learn correlations between features
-         that a single-qubit approach couldn't capture.
+    New (this circuit):
+        for each layer:
+            AngleEmbedding(inputs)          ← re-encode every layer
+            StronglyEntanglingLayers(       ← one layer at a time
+                weights[layer_idx])
+        expval(PauliZ(0))                   ← measure qubit 0
+        expval(PauliZ(1))                   ← AND qubit 1
 
-    This is the quantum analog of hidden layers in a neural network.
-    The weights ARE the trainable parameters, just like Linear layer weights.
+    ── Why re-uploading works ───────────────────────────────────────────────
 
-    ── Step 3: Measurement ──────────────────────────────────────────────────
-    Returns the *expectation value* of the Pauli-Z operator on qubit 0.
-    Pauli-Z measures whether the qubit is closer to |0⟩ (+1) or |1⟩ (-1).
-    The expectation value is the average over many repeated measurements,
-    which gives a continuous value in [-1, 1] — perfect as a classifier output.
+    A quantum circuit with a single AngleEmbedding can only represent
+    functions whose Fourier coefficients have frequencies {0, ±1} per qubit
+    (the "data encoding spectrum"). Re-uploading the same input N times,
+    interleaved with entangling layers, expands this to frequencies
+    {0, ±1, ±2, ..., ±N} per qubit — much richer, and enough to separate
+    the interleaved crescents of make_moons.
+
+    Classically, this is analogous to transforming feature x into
+    [x, x², x³, ...] before fitting a linear model: same linear machinery,
+    but now capable of fitting non-linear functions.
+
+    ── Why measuring both qubits helps ─────────────────────────────────────
+
+    The CNOT entangling gates create correlations between qubit 0 and qubit 1.
+    Measuring only qubit 0 was like computing a dot product and then throwing
+    away one of the two output dimensions. The post-processing layer (Linear
+    2→1) now learns the optimal weighted combination of both measurements.
     """
-    qml.AngleEmbedding(inputs, wires=range(N_QUBITS))
-    qml.StronglyEntanglingLayers(weights, wires=range(N_QUBITS))
-    return qml.expval(qml.PauliZ(0))
+    for layer_idx in range(N_LAYERS):
+        # Re-encode: inject the input features as rotation angles on each qubit.
+        # This is what "data re-uploading" means — the same data enters the
+        # circuit N_LAYERS times, once per layer, not just once at the start.
+        qml.AngleEmbedding(inputs, wires=range(N_QUBITS))
+
+        # Apply one layer of parameterized rotations + CNOT entanglement.
+        # weights[layer_idx:layer_idx+1] slices a single layer (shape (1, N_QUBITS, 3))
+        # so StronglyEntanglingLayers treats it as exactly 1 layer.
+        qml.StronglyEntanglingLayers(
+            weights[layer_idx : layer_idx + 1], wires=range(N_QUBITS)
+        )
+
+    # Measure both qubits. PauliZ expectation is in [-1, 1]:
+    #   close to +1 → qubit near |0⟩ state
+    #   close to -1 → qubit near |1⟩ state
+    return [qml.expval(qml.PauliZ(i)) for i in range(N_QUBITS)]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. Classical Neural Network
+# 1. Classical Neural Network  (unchanged — this is the baseline)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ClassicalNN(nn.Module):
@@ -95,6 +141,8 @@ class ClassicalNN(nn.Module):
     Why these layer sizes? This is intentionally small — we want a fair
     comparison with the QNN which has limited expressiveness. Using a massive
     classical network would make the comparison unfair.
+
+    Parameter count: Linear(2→8)=24, Linear(8→4)=36, Linear(4→1)=5 → Total: 65
     """
     def __init__(self):
         super().__init__()
@@ -117,36 +165,49 @@ class ClassicalNN(nn.Module):
 
 class QNN(nn.Module):
     """
-    A fully quantum classifier — no classical layers.
+    An improved fully-quantum classifier.
 
-    The raw input features are fed directly into the quantum circuit
-    via AngleEmbedding. The only trainable parameters are the rotation
-    angles inside the quantum circuit itself.
+    Changes from v1:
+      - Uses quantum_circuit_reupload: inputs re-encoded each layer
+      - Measures both qubits, returning shape (batch, 2)
+      - Adds a minimal post-processing layer Linear(2→1)+Sigmoid to combine
+        the two qubit measurements into a final probability
 
-    How TorchLayer works:
-        qml.qnn.TorchLayer wraps the qnode (quantum circuit function) so it
-        registers its weights as nn.Parameters. This means PyTorch's optimizer
-        can update them just like any other trainable weight. Gradients are
-        computed via the "parameter-shift rule" — a quantum analog of backprop.
+    The QNN still has no classical preprocessing — the raw (standardized)
+    inputs go directly into the quantum circuit. The only classical step is
+    the final 2→1 combination of measurements.
 
-    Output rescaling:
-        The circuit returns a value in [-1, 1] (PauliZ expectation).
-        Binary cross-entropy loss (BCELoss) expects values in [0, 1].
-        So we apply:  output = (raw + 1) / 2
-        This maps:  -1 → 0,  0 → 0.5,  +1 → 1
+    Forward pass:
+        inputs (batch, 2)
+            ↓  quantum_circuit_reupload
+        raw (batch, 2)  ← two PauliZ expectations, range [-1, 1]
+            ↓  (x + 1) / 2
+        scaled (batch, 2)  ← range [0, 1]
+            ↓  Linear(2→1) + Sigmoid
+        output (batch, 1)  ← final probability P(class=1)
+
+    Parameter count:
+        quantum (N_LAYERS × N_QUBITS × 3): 4 × 2 × 3 = 24
+        post Linear(2→1): 2 weights + 1 bias = 3
+        Total: 27 parameters
     """
     def __init__(self):
         super().__init__()
-        # weight_shapes tells TorchLayer how to initialize the circuit weights.
-        # StronglyEntanglingLayers needs (n_layers, n_qubits, 3) because each
-        # qubit gets 3 Euler rotation angles per layer.
         weight_shapes = {"weights": (N_LAYERS, N_QUBITS, 3)}
-        self.qlayer = qml.qnn.TorchLayer(quantum_circuit, weight_shapes)
+        self.qlayer = TorchLayer(quantum_circuit_reupload, weight_shapes)
+
+        # Combines the 2 qubit measurements into a single classification score.
+        # Linear(2→1) learns: "how much does each qubit's result matter?"
+        self.post = nn.Sequential(
+            nn.Linear(2, 1),
+            nn.Sigmoid()
+        )
 
     def forward(self, x):
-        out = self.qlayer(x)      # quantum circuit → shape (batch,), range [-1, 1]
-        out = (out + 1) / 2       # rescale to [0, 1]
-        return out.unsqueeze(1)   # shape (batch, 1) to match y_train shape
+        out = self.qlayer(x)      # quantum circuit → shape (batch, 2), range [-1, 1]
+        out = (out + 1) / 2       # rescale to [0, 1] for numerical stability
+        out = self.post(out)      # combine measurements → shape (batch, 1)
+        return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -155,56 +216,80 @@ class QNN(nn.Module):
 
 class HybridNN(nn.Module):
     """
-    A hybrid classical-quantum classifier.
+    An improved hybrid classical-quantum classifier.
 
-    This is the most interesting model for the paper — it uses classical
-    layers to do work that quantum circuits are bad at, and quantum layers
-    to do work that classical networks may be inefficient at.
+    Changes from v1:
+      - Pre-layer widened: Linear(2→2) → Linear(2→4→2) with Tanh at each step.
+        This gives the pre-layer genuine non-linear capacity. The original
+        Linear(2→2) could only apply a rotation/scale/shear — a 2×2 matrix
+        is still just a linear map. Going through a 4D hidden space lets the
+        classical layer learn a non-linear reshaping of the input manifold
+        before the quantum circuit sees it.
+      - Uses quantum_circuit_reupload: inputs re-encoded each layer
+      - Post-layer updated: Linear(1→1) → Linear(2→1) to consume both qubit
+        measurements
 
     Architecture:
-        [Classical pre]   Linear(2→2) + Tanh
-        [Quantum]         AngleEmbedding + StronglyEntanglingLayers (2 qubits, N_LAYERS)
-        [Classical post]  Linear(1→1) + Sigmoid
+        [Classical pre]   Linear(2→4) + Tanh + Linear(4→2) + Tanh
+        [Quantum]         data re-uploading circuit (N_LAYERS rounds of encode+entangle)
+        [Classical post]  Linear(2→1) + Sigmoid
 
-    Why Tanh in the pre-processing layer?
-        Tanh outputs values in (-1, 1), which maps naturally to rotation angles
-        in AngleEmbedding. Using ReLU here would clip negative values to 0,
-        potentially losing half the information before it even reaches the circuit.
+    Why Tanh at both pre-layer activations?
+        Tanh bounds outputs to (-1, 1), which is a natural range for
+        AngleEmbedding rotation angles. ReLU would clip all negative values to
+        zero, discarding information about which direction a feature points.
 
-    What the classical pre-layer does:
-        It learns a linear transformation of the 2D input. This means it can
-        rotate, scale, or shear the input space before the quantum circuit sees
-        it. In effect, it learns "how to present data to the quantum circuit"
-        in a way that makes the quantum processing maximally useful.
+    Why a hidden dimension of 4 in the pre-layer?
+        The pre-layer now has the shape: 2 → 4 → 2
+        This is the same idea as an "autoencoder bottleneck" — expand to a
+        higher-dimensional space to let the network mix features non-linearly,
+        then compress back down to the 2D space the quantum circuit expects.
+        A 2→2 linear map can only rotate/scale; a 2→4→2 non-linear map can
+        learn arbitrary continuous transformations in 2D.
 
-    What the classical post-layer does:
-        It takes the single quantum measurement output and applies a learned
-        linear rescaling + sigmoid before producing the final probability.
-        This gives the model one more degree of freedom to calibrate its output.
+    Forward pass:
+        inputs (batch, 2)
+            ↓  Linear(2→4) + Tanh + Linear(4→2) + Tanh
+        transformed (batch, 2)  ← non-linearly re-shaped features
+            ↓  quantum_circuit_reupload
+        raw (batch, 2)  ← two PauliZ expectations, range [-1, 1]
+            ↓  (x + 1) / 2
+        scaled (batch, 2)
+            ↓  Linear(2→1) + Sigmoid
+        output (batch, 1)  ← final probability P(class=1)
 
-    Gradient flow:
-        Because TorchLayer integrates with PyTorch autograd, gradients flow
-        backwards through the post layer → quantum circuit → pre layer in a
-        single backward() call. The quantum gradients are computed via the
-        parameter-shift rule and handed back to autograd seamlessly.
+    Parameter count:
+        pre  Linear(2→4):  2×4 weights + 4 biases = 12
+        pre  Linear(4→2):  4×2 weights + 2 biases = 10
+        quantum (N_LAYERS × N_QUBITS × 3): 4 × 2 × 3 = 24
+        post Linear(2→1):  2×1 weights + 1 bias   = 3
+        Total: 49 parameters
     """
     def __init__(self):
         super().__init__()
+
+        # Wider pre-processing: 2 → 4 → 2 with non-linear Tanh at each step.
+        # The 4D hidden layer lets the network learn non-linear combinations
+        # of the input features before they reach the quantum circuit.
         self.pre = nn.Sequential(
-            nn.Linear(2, 2),
-            nn.Tanh()
+            nn.Linear(2, 4),    # expand to 4D hidden space
+            nn.Tanh(),
+            nn.Linear(4, 2),    # compress back to 2D for AngleEmbedding
+            nn.Tanh()           # bound to (-1,1) — natural range for rotation angles
         )
+
         weight_shapes = {"weights": (N_LAYERS, N_QUBITS, 3)}
-        self.qlayer = qml.qnn.TorchLayer(quantum_circuit, weight_shapes)
+        self.qlayer = TorchLayer(quantum_circuit_reupload, weight_shapes)
+
+        # Combines both qubit measurements into the final classification score.
         self.post = nn.Sequential(
-            nn.Linear(1, 1),
+            nn.Linear(2, 1),
             nn.Sigmoid()
         )
 
     def forward(self, x):
         x = self.pre(x)           # classical feature transformation  (batch, 2)
-        x = self.qlayer(x)        # quantum processing                (batch,)
+        x = self.qlayer(x)        # quantum processing                (batch, 2)
         x = (x + 1) / 2          # rescale [-1,1] → [0,1]
-        x = x.unsqueeze(1)        # (batch, 1)
-        x = self.post(x)          # classical postprocessing           (batch, 1)
+        x = self.post(x)          # combine measurements              (batch, 1)
         return x
