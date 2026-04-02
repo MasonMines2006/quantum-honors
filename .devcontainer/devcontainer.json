@@ -1,0 +1,54 @@
+{
+  // ── Dev Container Configuration ──────────────────────────────────────────
+  // This file tells VS Code how to build and open the project inside Docker.
+  // When you click "Reopen in Container" (or run "Dev Containers: Rebuild and
+  // Reopen in Container" from the command palette), VS Code:
+  //   1. Builds the image using the Dockerfile in the project root
+  //   2. Starts a container from that image
+  //   3. Mounts your project folder into /app inside the container
+  //   4. Connects VS Code's window directly to the running container
+  //
+  // From that point, every terminal you open, every file you edit, and every
+  // Python process you run is happening *inside* the container — with all
+  // dependencies already installed.
+
+  "name": "quantum-honors",
+
+  // Point at the Dockerfile in the project root (one level up from .devcontainer/)
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+
+  // Mount your local project folder into the container's working directory.
+  // Changes you make in VS Code are immediately reflected inside the container
+  // (and vice versa) because it's the same folder, just mounted in.
+  "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind",
+  "workspaceFolder": "/app",
+
+  // VS Code extensions installed automatically inside the container.
+  // These live in the container, not your local VS Code install.
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",         // Python language support
+        "ms-python.pylance",        // Fast type checking and autocomplete
+        "ms-python.debugpy"         // Python debugger
+      ],
+      "settings": {
+        // Point VS Code at the Python interpreter inside the container
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.terminal.activateEnvironment": false
+      }
+    }
+  },
+
+  // Run `python main.py` when you open a new terminal in the container,
+  // or leave this out and just type it yourself. Commented out by default
+  // so the terminal opens clean.
+  // "postStartCommand": "python main.py",
+
+  // Keep the container running even when VS Code isn't connected,
+  // so a Rebuild doesn't lose state between sessions.
+  "shutdownAction": "stopContainer"
+}
