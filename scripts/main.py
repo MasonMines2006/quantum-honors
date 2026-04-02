@@ -8,13 +8,13 @@ Execution order:
   4. Generate plots and print the results table
 
 To run:
-    python main.py
+    python -m scripts.main
 """
 
-from data     import get_data
-from models   import ClassicalNN, QNN, HybridNN
-from train    import train_model
-from evaluate import evaluate_model, count_parameters, plot_results
+from scripts.data     import get_data
+from scripts.models   import ClassicalNN, QNN, HybridNN
+from scripts.train    import train_model
+from scripts.evaluate import evaluate_model, count_parameters, plot_results
 
 
 # ─────────────────────────────────────────────────────────────────────────────

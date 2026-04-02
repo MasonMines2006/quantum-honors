@@ -17,7 +17,7 @@ task. Intended as a university research project paper.
 interleaved crescent-shaped point clouds that are not linearly separable.
 
 **Stack:**
-- Python 3.10+
+- Python 3.10-3.12 locally (3.11 recommended), Docker uses Python 3.11
 - PyTorch — classical layers, optimizer, autograd
 - PennyLane — quantum circuit simulation via `default.qubit` (CPU)
 - scikit-learn — dataset generation and preprocessing
@@ -29,15 +29,16 @@ interleaved crescent-shaped point clouds that are not linearly separable.
 
 ```
 quantum-honors/
-├── data.py        Dataset generation, train/test split, normalization
-├── models.py      All three model classes + shared quantum circuit definition
-├── train.py       Shared training loop (BCELoss + Adam, mini-batch)
-├── evaluate.py    Test accuracy, parameter count, plots, summary table
-├── main.py        Entry point — runs the full experiment end to end
 ├── Makefile       Convenience commands (install, run, clean)
 ├── requirements.txt
 ├── AGENTS.md      This file
 ├── README.md
+├── scripts/
+│   ├── data.py        Dataset generation, train/test split, normalization
+│   ├── models.py      All three model classes + shared quantum circuit definition
+│   ├── train.py       Shared training loop (BCELoss + Adam, mini-batch)
+│   ├── evaluate.py    Test accuracy, parameter count, plots, summary table
+│   └── main.py        Entry point — runs the full experiment end to end
 └── docs/
     ├── overview.md         High-level project explanation
     ├── quantum_primer.md   Background on quantum computing concepts used
@@ -74,13 +75,13 @@ Classical post-processing learns to calibrate the quantum measurement output.
 
 ## Key Design Decisions
 
-- **N_QUBITS = 2**: One qubit per input feature. Defined in `models.py`.
+- **N_QUBITS = 2**: One qubit per input feature. Defined in `scripts/models.py`.
 - **N_LAYERS = 3**: Depth of `StronglyEntanglingLayers`. More layers = more
   expressiveness but slower simulation and more risk of barren plateaus.
 - **Tanh in Hybrid pre-layer**: Outputs in (-1,1), aligns well with rotation
   angle inputs for AngleEmbedding. ReLU would discard negative values.
 - **Separate hyperparameters per model**: QNN trains slower, so it uses fewer
-  epochs and a higher learning rate. See `CONFIG` dict in `main.py`.
+  epochs and a higher learning rate. See `CONFIG` dict in `scripts/main.py`.
 - **Shared quantum circuit**: Both QNN and HybridNN use the same `quantum_circuit`
   qnode. This keeps things DRY and makes comparisons more controlled.
 

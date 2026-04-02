@@ -8,7 +8,7 @@ does, why it was chosen, and what it means for the experiment.
 ## Shared Setup: The Quantum Circuit
 
 Both the QNN and HybridNN share the same underlying quantum circuit, defined
-once in `models.py` as a PennyLane `qnode`:
+once in `scripts/models.py` as a PennyLane `qnode`:
 
 ```python
 @qml.qnode(dev, interface="torch")

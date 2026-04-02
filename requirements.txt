@@ -2,4 +2,4 @@ pennylane
 torch
 scikit-learn
 matplotlib
-numpy
+numpy<2

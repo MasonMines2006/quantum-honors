@@ -36,4 +36,4 @@ COPY . .
 # The default command run when you do `docker run quantum-honors`.
 # Runs the full experiment. Override this on the command line if needed,
 # e.g.: docker run quantum-honors python -c "import pennylane; print(pennylane.__version__)"
-CMD ["python", "main.py"]
+CMD ["python", "-m", "scripts.main"]

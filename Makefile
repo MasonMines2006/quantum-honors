@@ -15,6 +15,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 IMAGE_NAME := quantum-honors
+PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
 .PHONY: install run clean docker-build docker-run docker-clean help
 
@@ -25,11 +26,18 @@ IMAGE_NAME := quantum-honors
 
 install:
 	@echo "Installing dependencies..."
-	pip install -r requirements.txt
+	@$(PYTHON) -c "import sys; major, minor = sys.version_info[:2]; \
+	assert major == 3 and 10 <= minor <= 12, (\
+	'Unsupported local Python version: ' + sys.version.split()[0] + '. ' \
+	'This project\'s local dependency set currently supports Python 3.10-3.12. ' \
+	'Use Python 3.11 (recommended), or run make docker-build && make docker-run.'); \
+	print(f'Using Python {major}.{minor} for local install.')"
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install -r requirements.txt
 
 run:
 	@echo "Running full experiment..."
-	python main.py
+	$(PYTHON) -m scripts.main
 
 clean:
 	@echo "Cleaning up generated files..."

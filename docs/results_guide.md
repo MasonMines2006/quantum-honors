@@ -1,6 +1,6 @@
 # Reading and Interpreting Results
 
-After running `python main.py` (or `make run`), you get two outputs:
+After running `python -m scripts.main` (or `make run`), you get two outputs:
 a printed summary table in the terminal, and `results.png` saved to the
 project root. This document explains what each part means and what to
 look for when writing up results.
@@ -170,12 +170,12 @@ but we're far from that regime for ML tasks.
 
 ## Reproducing Results
 
-All randomness in the experiment is seeded. If you run `python main.py` twice,
-you should get identical results. The seed is set in `data.py` via
+All randomness in the experiment is seeded. If you run `python -m scripts.main` twice,
+you should get identical results. The seed is set in `scripts/data.py` via
 `get_data(seed=42)`. To run multiple seeds for your paper:
 
 ```python
-# In main.py, change:
+# In scripts/main.py, change:
 X_train, X_test, y_train, y_test = get_data(n_samples=200, noise=0.1, seed=42)
 
 # To loop over seeds:

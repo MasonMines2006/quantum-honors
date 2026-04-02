@@ -42,7 +42,7 @@ are instant unless `requirements.txt` changes.
 
 ### Option B — Local Python
 
-Requires Python 3.10+.
+Requires Python 3.10-3.12 (Python 3.11 recommended).
 
 ```bash
 # 1. Install dependencies
@@ -52,6 +52,10 @@ make install
 make run
 ```
 
+If you use Python 3.13+, `torch` may not have compatible wheels in your
+environment yet. In that case, create a Python 3.11 virtual environment or
+use the Docker path above.
+
 Output: training logs printed to terminal + `results.png` saved to the project root.
 
 ---
@@ -60,16 +64,17 @@ Output: training logs printed to terminal + `results.png` saved to the project r
 
 ```
 quantum-honors/
-├── data.py          Dataset generation and preprocessing
-├── models.py        All three model definitions
-├── train.py         Shared training loop
-├── evaluate.py      Metrics, plots, summary table
-├── main.py          Entry point
 ├── Dockerfile       Container definition — builds the full environment
 ├── .dockerignore    Files excluded from the container image
 ├── Makefile         make docker-build / docker-run / install / run / clean
 ├── requirements.txt
 ├── AGENTS.md        Architecture reference and project preferences
+├── scripts/
+│   ├── data.py          Dataset generation and preprocessing
+│   ├── models.py        All three model definitions
+│   ├── train.py         Shared training loop
+│   ├── evaluate.py      Metrics, plots, summary table
+│   └── main.py          Entry point
 └── docs/
     ├── overview.md        What this project is and why
     ├── quantum_primer.md  Background on qubits, circuits, and measurement
@@ -83,7 +88,7 @@ quantum-honors/
 
 All managed automatically by Docker or `requirements.txt`:
 
-- Python 3.11
+- Python 3.11 (Docker image default)
 - [PennyLane](https://pennylane.ai) — quantum circuit simulation
 - PyTorch — neural network training
 - scikit-learn — dataset generation
